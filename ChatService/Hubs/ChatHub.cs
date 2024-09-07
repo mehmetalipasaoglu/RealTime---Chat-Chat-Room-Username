@@ -1,59 +1,76 @@
-using ChatService.Models;
 using Microsoft.AspNetCore.SignalR;
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
+using ChatService.Models;
 using ChatService.DataService;
 
 namespace ChatService.Hubs
 {
     public class ChatHub : Hub
     {
-        private readonly SharedDb _shared;
+        private readonly SharedDb _sharedDb;
 
-        public ChatHub(SharedDb shared)
+        public ChatHub(SharedDb sharedDb)
         {
-            _shared = shared;
+            _sharedDb = sharedDb;
         }
 
-        public async Task JoinChat(UserConnection conn)
+        public async Task JoinSpecificChatRoom(UserConnection userConnection)
         {
-            await Clients.All.SendAsync("JoinSpecificChatRoom", "admin", $"{conn.Username} has joined the chat");
-        }
+            await Groups.AddToGroupAsync(Context.ConnectionId, userConnection.ChatRoom);
 
-        public async Task JoinSpecificChatRoom(UserConnection conn)
-        {
-            await Groups.AddToGroupAsync(Context.ConnectionId, conn.ChatRoom);
+            // Store user connection
+            _sharedDb.Connections[Context.ConnectionId] = userConnection;
 
-            _shared.Connections[Context.ConnectionId] = conn;
-
-            // Ensure the chat history dictionary has an entry for this room
-            _shared.ChatHistories.TryAdd(conn.ChatRoom, new ConcurrentQueue<string>());
-
-            // Send join message to room
-            await Clients.Group(conn.ChatRoom).SendAsync("JoinSpecificChatRoom", "admin", $"{conn.Username} has joined the chat room {conn.ChatRoom}");
-
-            // Send chat history to the user who just joined
-            if (_shared.ChatHistories.TryGetValue(conn.ChatRoom, out var chatHistory))
+            // Send message history to the user
+            if (_sharedDb.Messages.TryGetValue(userConnection.ChatRoom, out var messageQueue))
             {
-                foreach (var message in chatHistory)
+                foreach (var (user, message, timestamp) in messageQueue)
                 {
-                    await Clients.Client(Context.ConnectionId).SendAsync("ReceiveSpecificMessage", "admin", message);
+                    await Clients.Caller.SendAsync("ReceiveSpecificMessage", user, message, timestamp);
                 }
             }
+
+            await Clients.Group(userConnection.ChatRoom).SendAsync("JoinSpecificChatRoom", userConnection.Username, $"{userConnection.Username} has joined the chat.");
+        }
+
+        public async Task LeaveSpecificChatRoom(UserConnection userConnection)
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, userConnection.ChatRoom);
+
+            // Remove user connection
+            _sharedDb.Connections.TryRemove(Context.ConnectionId, out _);
+
+            await Clients.Group(userConnection.ChatRoom).SendAsync("ReceiveSpecificMessage", userConnection.Username, $"{userConnection.Username} has left the chat.", DateTime.Now);
         }
 
         public async Task SendMessage(string message)
         {
-            if (_shared.Connections.TryGetValue(Context.ConnectionId, out UserConnection conn))
+            if (_sharedDb.Connections.TryGetValue(Context.ConnectionId, out var userConnection))
             {
-                await Clients.Group(conn.ChatRoom).SendAsync("ReceiveSpecificMessage", conn.Username, message);
+                var timestamp = DateTime.Now;
+                var chatMessage = (userConnection.Username, message, timestamp);
 
-                // Store message in chat history
-                if (_shared.ChatHistories.TryGetValue(conn.ChatRoom, out var chatHistory))
-                {
-                    chatHistory.Enqueue($"{conn.Username}: {message}");
-                }
+                _sharedDb.Messages.AddOrUpdate(userConnection.ChatRoom,
+                    new ConcurrentQueue<(string, string, DateTime)>(new[] { chatMessage }),
+                    (key, queue) =>
+                    {
+                        queue.Enqueue(chatMessage);
+                        return queue;
+                    });
+
+                await Clients.Group(userConnection.ChatRoom).SendAsync("ReceiveSpecificMessage", userConnection.Username, message, timestamp);
             }
+        }
+
+        public override async Task OnDisconnectedAsync(Exception? exception)
+        {
+            if (_sharedDb.Connections.TryRemove(Context.ConnectionId, out var userConnection))
+            {
+                await Clients.Group(userConnection.ChatRoom).SendAsync("ReceiveSpecificMessage", userConnection.Username, $"{userConnection.Username} has left the chat.", DateTime.Now);
+            }
+
+            await base.OnDisconnectedAsync(exception);
         }
     }
 }

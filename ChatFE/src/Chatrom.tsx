@@ -1,20 +1,31 @@
 import React from "react";
 import { Box } from "@mui/material";
 import MessageContainer from "./MessageContainer";
-import SentMessageForm from "./SentMessagForm"; // Renamed SentMessagForm to SentMessageForm for consistency
+import SentMessageForm from "./SentMessagForm";
 
-interface Props {
-  messages: { userName: string; message: string }[];
-  sendMessage: (message: string) => void; // Corrected prop name sendmessage to sendMessage
+interface Message {
+  userName: string;
+  message: string;
+  timestamp: Date;
 }
 
-const Chatrom: React.FC<Props> = ({ messages, sendMessage }) => {
+interface Props {
+  messages: Message[];
+  sendMessage: (message: string) => void;
+}
+
+const ChatRoom: React.FC<Props> = ({ messages, sendMessage }) => {
   return (
-    <Box>
-      <SentMessageForm sendMessage={sendMessage} /> {/* Corrected prop name sendmessage to sendMessage */}
-      <MessageContainer messages={messages} />
+    <Box sx={{ padding: "20px", flex: 1, display: "flex", flexDirection: "column" }}>
+      <Box sx={{ textAlign: "center", marginBottom: "10px", fontSize: "0.9em", color: "#666" }}>
+        {new Date().toLocaleDateString()}
+      </Box>
+      <Box sx={{ flex: 1, overflowY: "auto", marginBottom: "20px" }}>
+        <MessageContainer messages={messages} />
+      </Box>
+      <SentMessageForm sendMessage={sendMessage} />
     </Box>
   );
 };
 
-export default Chatrom;
+export default ChatRoom;
